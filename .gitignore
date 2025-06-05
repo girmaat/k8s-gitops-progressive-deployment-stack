@@ -1,0 +1,42 @@
+# OS/system files
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
+
+# Logs & temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+
+# Helm
+charts/**/charts/
+charts/**/tmpcharts/
+charts/**/values.yaml~
+charts/**/Chart.lock
+
+# Kubernetes
+*.out
+*.orig
+*.rej
+
+# Kustomize build output
+overlays/**/build/
+overlays/**/kustomization.yaml.backup
+
+# Terraform (optional if using)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Python (if scripting in CI)
+__pycache__/
+*.py[cod]
+
+# Secrets (precaution)
+secrets/**/*.yaml
+!secrets/**/README.md   # allow README stubs
