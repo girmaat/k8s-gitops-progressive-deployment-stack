@@ -15,7 +15,7 @@ echo "=====================================" | tee "$LOGFILE"
 echo "Checking ArgoCD app drift..." | tee -a "$LOGFILE"
 ./scripts/verify-drift.sh --refresh >> "$LOGFILE"
 
-if grep -q "❌ Drift detected" "$LOGFILE"; then
+if grep -q "Drift detected" "$LOGFILE"; then
   DRIFT_FOUND=1
 fi
 

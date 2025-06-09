@@ -6,10 +6,10 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${BLUE}🔧 Restarting chronyd...${NC}"
+echo -e "${BLUE}Restarting chronyd...${NC}"
 sudo systemctl restart chronyd
 
-echo -e "${BLUE}⏱️ Forcing immediate time sync with 'chronyc makestep'...${NC}"
+echo -e "${BLUE}Forcing immediate time sync with 'chronyc makestep'...${NC}"
 sudo chronyc makestep
 
 echo -e "${BLUE}Checking new system time drift...${NC}"
