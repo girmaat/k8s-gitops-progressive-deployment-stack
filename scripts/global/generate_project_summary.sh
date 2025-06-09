@@ -50,4 +50,4 @@ find . -type f ! -path "*/.git/*" | while read -r file; do
   ((counter++))
 done
 
-echo "✅ Project summary written to: $RELATIVE_ROOT/scripts/global/$(basename "$OUTPUT_FILE")"
+echo "Project summary written to: $RELATIVE_ROOT/scripts/global/$(basename "$OUTPUT_FILE")"

@@ -1,0 +1,18 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRepos
+metadata:
+  name: block-latest-tag
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+  parameters:
+    repos:
+      - "ghcr.io/girmaat/"  # optional
+  validation:
+    message: "Use of 'image: latest' is not allowed. Please pin to a version tag."
+  matchConditions:
+    - key: "image"
+      operator: NotEquals
+      values: ["latest"]

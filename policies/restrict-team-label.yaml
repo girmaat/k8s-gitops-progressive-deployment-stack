@@ -1,0 +1,5 @@
+# Policy: Require 'team' label on all workloads
+# Description: Enforces every Deployment, StatefulSet, and DaemonSet to have a `metadata.labels.team` defined.
+# Applies To: apps/Deployment, apps/StatefulSet, apps/DaemonSet
+# Enforced By: Gatekeeper ConstraintTemplate + Constraint
+# Purpose: Ensures workload ownership for billing, support, and GitOps routing.

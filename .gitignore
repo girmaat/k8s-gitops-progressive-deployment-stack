@@ -42,3 +42,6 @@ secrets/**/*.yaml
 !secrets/**/README.md   # allow README stubs
 
 .git*
+
+audit-runner/*.log
+audit-runner/*.tmp

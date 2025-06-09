@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gitops-audit
+  namespace: monitoring
+  labels:
+    app: gitops-audit
+spec:
+  schedule: "0 * * * *"  #  Every hour
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: audit
+              image: ghcr.io/girmaat/gitops-audit:latest  #  Replace if needed
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: slack-webhook-secret
+                      key: url
+              resources:
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
