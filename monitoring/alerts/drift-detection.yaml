@@ -1,0 +1,110 @@
+{
+  "id": null,
+  "title": "Demo API Rollout Monitoring",
+  "timezone": "browser",
+  "schemaVersion": 26,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "HTTP Success Rate (2xx/4xx)",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"demo-api\",status!~\"5..\"}[1m])) / sum(rate(http_requests_total{job=\"demo-api\"}[1m]))",
+          "legendFormat": "success-rate",
+          "refId": "A"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "percent",
+          "label": "Success Rate",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "HTTP 5xx Error Rate",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total{job=\"demo-api\",status=~\"5..\"}[1m])",
+          "legendFormat": "5xx Errors",
+          "refId": "B"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Errors/sec",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "CPU Usage (Cores)",
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{container=\"demo-api\"}[1m])",
+          "legendFormat": "CPU Usage",
+          "refId": "C"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Cores",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "Memory Usage (Bytes)",
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{container=\"demo-api\"}",
+          "legendFormat": "Memory Usage",
+          "refId": "D"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "bytes",
+          "label": "Memory",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    }
+  ]
+}

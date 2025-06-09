@@ -1,0 +1,67 @@
+---
+# Source: demo-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app: demo-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+# Source: demo-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-api
+  template:
+    metadata:
+      labels:
+        app: demo-api
+    spec:
+      containers:
+        - name: demo-api
+          image: "ghcr.io/girmaat/demo-api:dev-latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 250m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20

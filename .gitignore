@@ -40,3 +40,5 @@ __pycache__/
 # Secrets (precaution)
 secrets/**/*.yaml
 !secrets/**/README.md   # allow README stubs
+
+.git*

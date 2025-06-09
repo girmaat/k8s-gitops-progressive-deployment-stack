@@ -1,0 +1,95 @@
+{
+  "id": null,
+  "title": "HPA Behavior & Rollout Progression",
+  "timezone": "browser",
+  "schemaVersion": 26,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "HPA Replica Count Over Time",
+      "targets": [
+        {
+          "expr": "kube_horizontalpodautoscaler_status_current_replicas{hpa=\"demo-api\"}",
+          "legendFormat": "Current Replicas",
+          "refId": "A"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_spec_max_replicas{hpa=\"demo-api\"}",
+          "legendFormat": "Max Replicas",
+          "refId": "B"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Replicas",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "CPU Utilization Target vs Actual (HPA Source)",
+      "targets": [
+        {
+          "expr": "avg(container_cpu_usage_seconds_total{container=\"demo-api\"}) by (pod)",
+          "legendFormat": "Actual Usage",
+          "refId": "C"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_spec_target_cpu_utilization_percentage{hpa=\"demo-api\"}",
+          "legendFormat": "Target Utilization",
+          "refId": "D"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "percent",
+          "label": "CPU Usage",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "Rollout Step Progression",
+      "targets": [
+        {
+          "expr": "rollout_info{rollout=\"demo-api\"}",
+          "legendFormat": "Step Index",
+          "refId": "E"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Step",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    }
+  ]
+}
