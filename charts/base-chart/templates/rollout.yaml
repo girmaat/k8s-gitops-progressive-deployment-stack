@@ -53,6 +53,50 @@ spec:
         {{- end }}
 {{- end }}
 
+{{- else if and .Values.strategy (eq .Values.strategy.type "blueGreen") }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+  labels:
+    {{- include "demo-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: {{ include "demo-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "demo-api.name" . }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+{{- if .Values.resources }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- end }}
+{{- if .Values.readinessProbe }}
+          readinessProbe:
+{{ toYaml .Values.readinessProbe | indent 12 }}
+{{- end }}
+{{- if .Values.livenessProbe }}
+          livenessProbe:
+{{ toYaml .Values.livenessProbe | indent 12 }}
+{{- end }}
+  strategy:
+    blueGreen:
+      activeService: {{ include "demo-api.fullname" . }}-active
+      previewService: {{ include "demo-api.fullname" . }}-preview
+      autoPromotionEnabled: false
+
 {{- else }}
 apiVersion: apps/v1
 kind: Deployment

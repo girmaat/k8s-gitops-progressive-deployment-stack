@@ -1,0 +1,26 @@
+
+repos:
+  - repo: https://github.com/pre-commit/mirrors-yamllint
+    rev: v1.32.0
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/instrumenta/kubeval
+    rev: v0.16.1
+    hooks:
+      - id: kubeval
+        args: ["--strict"]
+
+  - repo: local
+    hooks:
+      - id: helm-lint
+        name: Helm Lint
+        entry: bash -c 'helm lint charts/services/*'
+        language: system
+        files: ^charts/
+
+      - id: kustomize-build
+        name: Kustomize Build (overlays/)
+        entry: bash -c 'kustomize build overlays/dev && kustomize build overlays/staging && kustomize build overlays/prod'
+        language: system
+        files: ^overlays/

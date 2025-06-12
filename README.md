@@ -63,3 +63,10 @@ helm template charts/services/demo-api -f overlays/dev/values/demo-api-values.ya
 ## Ownership
 
 Defined in `project-metadata.yaml`.
+
+## Promotion Workflow
+
+1. CI pushes a new image tag
+2. Tag is committed to `overlays/staging/values.yaml`
+3. Run `scripts/promote-image-to-prod.sh` to promote
+4. ArgoCD detects Git change and syncs to cluster

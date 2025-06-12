@@ -1,0 +1,32 @@
+services:
+  demo-api:
+    description: REST API microservice for demonstrating progressive delivery using Helm + Kustomize + GitOps
+    owner: dev1
+    team: platform
+    email: demo-api-team@example.com  # Replace with actual team contact
+    environments:
+      - dev
+      - staging
+      - prod
+    argoAppNames:
+      dev: demo-api-dev
+      staging: demo-api-staging
+      prod: demo-api-prod
+    chart: charts/services/demo-api
+    overlayPaths:
+      dev: overlays/dev
+      staging: overlays/staging
+      prod: overlays/prod
+    rollout: true
+    hpa:
+      dev: disabled
+      staging: enabled
+      prod: enabled
+    probes: parameterized
+    promotionScript: scripts/promote-image-to-prod.sh
+    monitoringDashboards:
+      - monitoring/demo-api-dashboard-configmap.yaml
+      - monitoring/hpa-rollout-dashboard-configmap.yaml
+    policyConstraints:
+      - deny-latest-tag
+      - enforce-team-label

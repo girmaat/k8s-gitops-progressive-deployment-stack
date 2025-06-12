@@ -1,20 +1,20 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: demo-api-dev
+  name: frontend-prod
   namespace: argocd
 spec:
   project: default
-
   source:
     repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
     targetRevision: HEAD
-    path: overlays/dev
-
+    path: overlays/prod
+    helm:
+      valueFiles:
+        - values/frontend-values.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: dev
-
+    namespace: prod
   syncPolicy:
     automated:
       prune: true

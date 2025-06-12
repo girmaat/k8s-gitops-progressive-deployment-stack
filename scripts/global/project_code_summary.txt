@@ -1,0 +1,3170 @@
+----------------------------------------------
+1.  charts/services/demo-api/values.yaml
+----------------------------------------------
+
+# Sample values for demo-api
+# These are not used in production — real values live in overlays/<env>/values/demo-api-values.yaml
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/example/demo-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 50
+      - pause: { duration: 30s }
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+
+----------------------------------------------
+2.  charts/services/frontend/values.yaml
+----------------------------------------------
+
+# Sample values for frontend
+# These are not used in production — real values live in overlays/<env>/values/frontend-values.yaml
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/example/frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+
+strategy:
+  type: blueGreen
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+
+----------------------------------------------
+3.  charts/services/README.md
+----------------------------------------------
+
+# Helm Service Charts
+
+This folder contains Helm charts for microservices deployed via GitOps. Each chart is structured for reusability and environment-specific configuration via overlays and values files.
+
+---
+
+## Structure
+
+```
+charts/
+  services/
+    demo-api/        # Helm chart for demo-api
+    frontend/        # Helm chart for frontend
+```
+
+Each service subfolder typically includes:
+- `Chart.yaml`: Metadata (name, version, appVersion)
+- `values.yaml`: Default, base-level config (overridden by environment overlays)
+- `templates/`: Kubernetes YAML templates using Helm functions
+- `_helpers.tpl`: Shared naming/labeling conventions
+
+---
+
+## Features Supported
+
+| Feature      | Description |
+|--------------|-------------|
+| Probes       | Readiness and liveness probes are configurable via values |
+| HPA          | Enable/disable HorizontalPodAutoscaler with custom thresholds |
+| Rollouts     | Canary rollout logic using `kind: Rollout` and strategy steps |
+| Resource Limits | Define CPU/memory requests and limits per environment |
+| Strategy     | Support both RollingUpdate and Argo Rollouts via `.Values.strategy` |
+
+---
+
+## Rendering Example
+
+Render manifests for specific environments:
+```bash
+# demo-api for dev
+helm template ./charts/services/demo-api \
+  -f overlays/dev/values/demo-api-values.yaml
+
+# frontend for staging
+helm template ./charts/services/demo-api \
+  -f overlays/staging/values/frontend-values.yaml
+```
+
+> Note: All services reuse the same Helm chart (`demo-api/`) via value overrides.
+
+---
+
+## Best Practices
+
+- Keep chart logic generic and reusable across services.
+- Use `values.yaml` for defaults; override per environment in `overlays/`.
+- Parameterize all input (image, probes, HPA, strategy) — no hardcoding.
+
+
+
+----------------------------------------------
+4.  charts/base-chart/templates/_helpers.tpl
+----------------------------------------------
+
+{{- define "demo-api.name" -}}
+{{ .Chart.Name }}
+{{- end }}
+
+{{- define "demo-api.fullname" -}}
+{{ .Release.Name }}-{{ .Chart.Name }}
+{{- end }}
+
+{{- define "demo-api.labels" -}}
+app.kubernetes.io/name: {{ include "demo-api.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+
+----------------------------------------------
+5.  charts/base-chart/templates/service.yaml
+----------------------------------------------
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+  labels: {{- include "demo-api.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: {{ include "demo-api.name" . }}
+  ports:
+    - port: 80
+      targetPort: {{ .Values.service.port }}
+      protocol: TCP
+
+
+----------------------------------------------
+6.  charts/base-chart/templates/hpa.yaml
+----------------------------------------------
+
+{{- if .Values.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "demo-api.fullname" . }}
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.targetCPUUtilizationPercentage }}
+{{- end }}
+
+
+----------------------------------------------
+7.  charts/base-chart/templates/rollout.yaml
+----------------------------------------------
+
+{{- if and .Values.strategy (eq .Values.strategy.type "canary") }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+  labels:
+    {{- include "demo-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: {{ include "demo-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "demo-api.name" . }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+{{- if .Values.resources }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- end }}
+{{- if .Values.readinessProbe }}
+          readinessProbe:
+{{ toYaml .Values.readinessProbe | indent 12 }}
+{{- end }}
+{{- if .Values.livenessProbe }}
+          livenessProbe:
+{{ toYaml .Values.livenessProbe | indent 12 }}
+{{- end }}
+  strategy:
+    canary:
+      steps:
+{{- range .Values.strategy.canary.steps }}
+        {{- if .setWeight }}
+        - setWeight: {{ .setWeight }}
+        {{- else if .pause }}
+        - pause: {{ toYaml .pause | nindent 10 }}
+        {{- else if .analysis }}
+        - analysis:
+            templates:
+              - templateName: {{ .analysis.templateName }}
+            args:
+{{ toYaml .analysis.args | indent 14 }}
+        {{- end }}
+{{- end }}
+
+{{- else if and .Values.strategy (eq .Values.strategy.type "blueGreen") }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+  labels:
+    {{- include "demo-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: {{ include "demo-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "demo-api.name" . }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+{{- if .Values.resources }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- end }}
+{{- if .Values.readinessProbe }}
+          readinessProbe:
+{{ toYaml .Values.readinessProbe | indent 12 }}
+{{- end }}
+{{- if .Values.livenessProbe }}
+          livenessProbe:
+{{ toYaml .Values.livenessProbe | indent 12 }}
+{{- end }}
+  strategy:
+    blueGreen:
+      activeService: {{ include "demo-api.fullname" . }}-active
+      previewService: {{ include "demo-api.fullname" . }}-preview
+      autoPromotionEnabled: false
+
+{{- else }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+  labels:
+    {{- include "demo-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "demo-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "demo-api.name" . }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+{{- if .Values.resources }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- end }}
+{{- if .Values.readinessProbe }}
+          readinessProbe:
+{{ toYaml .Values.readinessProbe | indent 12 }}
+{{- end }}
+{{- if .Values.livenessProbe }}
+          livenessProbe:
+{{ toYaml .Values.livenessProbe | indent 12 }}
+{{- end }}
+{{- end }}
+
+
+----------------------------------------------
+8.  charts/base-chart/templates/analysis-template.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: demo-api-success-rate
+  namespace: { { .Release.Namespace } }
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: http-success-rate
+      interval: 30s
+      successCondition: result[0] >= 0.95
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring:9090
+          query: |
+            sum(rate(http_requests_total{job="{{args.service-name}}",status!~"5.."}[1m])) /
+            sum(rate(http_requests_total{job="{{args.service-name}}"}[1m]))
+
+
+----------------------------------------------
+9.  charts/base-chart/templates/deployment.legacy.yaml
+----------------------------------------------
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "demo-api.fullname" . }}
+  labels:
+{{- include "demo-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "demo-api.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "demo-api.name" . }}
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+{{- if .Values.resources }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+{{- end }}
+{{- if .Values.readinessProbe }}
+          readinessProbe:
+{{ toYaml .Values.readinessProbe | indent 12 }}
+{{- end }}
+{{- if .Values.livenessProbe }}
+          livenessProbe:
+{{ toYaml .Values.livenessProbe | indent 12 }}
+{{- end }}
+
+
+----------------------------------------------
+10.  charts/base-chart/Chart.yaml
+----------------------------------------------
+
+apiVersion: v2
+name: demo-api
+description: Reusable Helm chart for demo-api with HPA, probes, and rollout support
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+
+----------------------------------------------
+11.  charts/base-chart/values.yaml
+----------------------------------------------
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/girmaat/demo-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 250m
+    memory: 128Mi
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+strategy:
+  type: canary  # or blueGreen
+  canary:
+    steps:
+      - setWeight: 10
+      - pause: { duration: 30s }
+      - setWeight: 50
+      - pause: { duration: 60s }
+      - setWeight: 100
+
+
+----------------------------------------------
+12.  charts/base-chart/README.md
+----------------------------------------------
+
+# Helm Chart: demo-api
+
+Reusable Helm chart for the `demo-api` service with support for probes, HPA, resource controls, and Argo Rollouts integration.
+
+## Features
+
+- Supports **Rollout** and **Deployment** modes
+- Canary and Blue-Green rollout strategies
+- Health checks (probes), HPA, resource limits
+- Works with GitOps overlays and ArgoCD
+- Clean separation of chart logic vs. service configuration
+
+## Required Values
+
+```yaml
+image:
+  repository:
+  tag:
+  pullPolicy:
+replicaCount:
+readinessProbe:
+livenessProbe:
+resources:
+strategy:
+```
+
+## Rendering Example
+
+```bash
+helm template ./charts/services/demo-api -f overlays/dev/values/demo-api-values.yaml
+```
+
+## Templates
+
+- `deployment.yaml` or `rollout.yaml`
+- `hpa.yaml`
+- `service.yaml`
+- `analysis-template.yaml`
+
+## How to Use
+
+### 1. Point Helm to this chart:
+
+In `scripts/render-all-services.sh`:
+```bash
+CHART_PATH="charts/base-chart"
+
+### 2. Configure per-service rollout values:
+In overlays/dev/values/demo-api-values.yaml:
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 25
+      - pause: { duration: 30s }
+      - setWeight: 100
+
+Or in overlays/prod/values/frontend-values.yaml:
+strategy:
+  type: blueGreen
+
+
+### 3. Output generated manifests:
+helm template demo-api charts/base-chart -f overlays/dev/values/demo-api-values.yaml
+Or run:
+./scripts/render-all-services.sh
+
+### When to Modify This Chart
+  - You may update this chart if:
+  - You want to add new rollout features (e.g., experiment analysis)
+  - You need to support additional container settings (e.g., sidecars)
+  - You want to improve templates (labels, annotations, etc.)
+  - Changes to this chart affect all services.
+
+### What Not to Do
+  - Do not duplicate this chart into charts/services/<service>/templates/
+  - Do not modify chart logic in a service-specific way
+
+----------------------------------------------
+13.  overlays/dev/values/demo-api-values.yaml
+----------------------------------------------
+
+replicaCount: 1
+
+image:
+  tag: dev-latest
+
+resources:
+  limits:
+    cpu: "250m"
+    memory: "128Mi"
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 20
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 10
+      - pause: { duration: 30s }
+      - setWeight: 50
+      - pause: { duration: 60s }
+      - setWeight: 100
+
+
+----------------------------------------------
+14.  overlays/dev/values/frontend-values.yaml
+----------------------------------------------
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/girmaat/frontend
+  tag: dev-latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 3000
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 20
+      - pause: { duration: 30s }
+      - setWeight: 100
+
+
+----------------------------------------------
+15.  overlays/dev/kustomization.yaml
+----------------------------------------------
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rendered.yaml
+
+commonLabels:
+  env: dev
+
+
+----------------------------------------------
+16.  overlays/dev/rendered.yaml
+----------------------------------------------
+
+---
+# Source: demo-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app: demo-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+# Source: demo-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-api
+  template:
+    metadata:
+      labels:
+        app: demo-api
+    spec:
+      containers:
+        - name: demo-api
+          image: "ghcr.io/girmaat/demo-api:dev-latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 250m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+
+
+----------------------------------------------
+17.  overlays/dev/README.md
+----------------------------------------------
+
+# 🌱 Kustomize Overlay: dev
+
+Custom configuration for the `dev` environment.
+
+---
+
+## Table of Contents
+- [Included Files](#included-files)
+- [Customizations](#customizations)
+- [Usage](#usage)
+
+---
+
+## Included Files
+
+- `values/demo-api-values.yaml`: Helm values
+- `kustomization.yaml`: Reference to base Helm output
+
+## Customizations
+
+- Lower resource limits
+- Canary rollout without metric gating
+- Debug image tags
+
+## Usage
+
+```bash
+kustomize build overlays/dev/
+```
+
+
+----------------------------------------------
+18.  overlays/staging/values/demo-api-values.yaml
+----------------------------------------------
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/girmaat/demo-api
+  tag: staging-v1.2.3
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+resources:
+  limits:
+    cpu: 400m
+    memory: 256Mi
+  requests:
+    cpu: 200m
+    memory: 128Mi
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 20
+
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 10
+      - pause: { duration: 30s }
+      - analysis:
+          templateName: demo-api-success-rate
+          args:
+            - name: service-name
+              value: demo-api
+      - setWeight: 50
+      - pause: { duration: 60s }
+      - setWeight: 100
+
+
+----------------------------------------------
+19.  overlays/staging/values/frontend-values.yaml
+----------------------------------------------
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/girmaat/frontend
+  tag: staging-v1.0.0
+  pullPolicy: IfNotPresent
+
+service:
+  port: 3000
+
+resources:
+  limits:
+    cpu: 400m
+    memory: 256Mi
+  requests:
+    cpu: 200m
+    memory: 128Mi
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 20
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 20
+      - pause: { duration: 30s }
+      - setWeight: 50
+      - pause: { duration: 60s }
+      - setWeight: 100
+
+
+----------------------------------------------
+20.  overlays/staging/kustomization.yaml
+----------------------------------------------
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rendered.yaml
+
+commonLabels:
+  env: staging
+
+
+----------------------------------------------
+21.  overlays/staging/rendered.yaml
+----------------------------------------------
+
+---
+# Source: demo-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app: demo-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+# Source: demo-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-api
+  template:
+    metadata:
+      labels:
+        app: demo-api
+    spec:
+      containers:
+        - name: demo-api
+          image: "ghcr.io/girmaat/demo-api:staging-v1.2.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 400m
+              memory: 256Mi
+            requests:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+# Source: demo-api/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: demo-api-demo-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: demo-api-demo-api
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+
+----------------------------------------------
+22.  overlays/prod/values/demo-api-values.yaml
+----------------------------------------------
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/girmaat/demo-api
+  tag: prod-v1.2.3
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 300m
+    memory: 256Mi
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 6
+  periodSeconds: 10
+
+strategy:
+  type: canary
+  canary:
+    steps:
+      - setWeight: 10
+      - pause: {}
+      - analysis:
+          templateName: demo-api-success-rate
+          args:
+            - name: service-name
+              value: demo-api
+      - setWeight: 50
+      - pause: {}
+      - setWeight: 100
+
+
+----------------------------------------------
+23.  overlays/prod/values/frontend-values.yaml
+----------------------------------------------
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/girmaat/frontend
+  tag: prod-v1.0.0
+  pullPolicy: IfNotPresent
+
+service:
+  port: 3000
+
+resources:
+  limits:
+    cpu: 600m
+    memory: 512Mi
+  requests:
+    cpu: 300m
+    memory: 256Mi
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 6
+  periodSeconds: 10
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 65
+
+strategy:
+  strategy:
+    type: blueGreen
+
+----------------------------------------------
+24.  overlays/prod/kustomization.yaml
+----------------------------------------------
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rendered.yaml
+
+commonLabels:
+  env: prod
+
+
+----------------------------------------------
+25.  overlays/prod/rendered.yaml
+----------------------------------------------
+
+---
+# Source: demo-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app: demo-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+# Source: demo-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-api-demo-api
+  labels:
+    app.kubernetes.io/name: demo-api
+    app.kubernetes.io/instance: demo-api
+    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: demo-api
+  template:
+    metadata:
+      labels:
+        app: demo-api
+    spec:
+      containers:
+        - name: demo-api
+          image: "ghcr.io/girmaat/demo-api:prod-v1.2.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 6
+            periodSeconds: 10
+---
+# Source: demo-api/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: demo-api-demo-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: demo-api-demo-api
+  minReplicas: 3
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+
+
+----------------------------------------------
+26.  overlays/README.md
+----------------------------------------------
+
+# Kustomize Overlays (Per Environment)
+
+This directory contains environment-specific configuration (`overlays/`) used to apply deployment differences on top of reusable Helm charts.
+
+Each subfolder (`dev/`, `staging/`, `prod/`) contains:
+- `values/*.yaml`: Helm values specific to each service and environment
+- `rendered.yaml`: Helm template output used by Kustomize
+- `kustomization.yaml`: Defines how Kustomize composes the manifest
+
+---
+
+## Structure
+
+```
+overlays/
+  dev/
+    values/
+      demo-api-values.yaml
+      frontend-values.yaml
+    kustomization.yaml
+    rendered.yaml
+
+  staging/
+    values/
+      demo-api-values.yaml
+      frontend-values.yaml
+    ...
+
+  prod/
+    ...
+```
+
+---
+
+## What Goes Here?
+
+- Environment-specific overrides: image tags, resource limits, probe timings, HPA, rollout steps.
+- Kustomize applies these on top of rendered Helm templates before ArgoCD syncs them.
+
+---
+
+## Example Usage
+
+```bash
+# Build manifests for dev
+kustomize build overlays/dev/
+
+# Render Helm + Kustomize manually (optional testing)
+helm template charts/services/demo-api -f overlays/staging/values/demo-api-values.yaml > overlays/staging/rendered.yaml
+kustomize build overlays/staging/
+```
+
+---
+
+## GitOps Workflow
+
+Each environment is mapped to a separate ArgoCD `Application` (see `apps/*.yaml`).
+
+Changes made here are:
+- Version-controlled
+- Promoted via PRs
+- Synced automatically by ArgoCD
+
+---
+
+## Notes
+
+- **Do not duplicate full YAMLs.** Only override via `values.yaml` or patches.
+- **Always use Git commits/PRs** to modify overlays.
+
+
+----------------------------------------------
+27.  apps/demo-api/dev.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-api-dev
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: overlays/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+----------------------------------------------
+28.  apps/demo-api/prod.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-api-prod
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+----------------------------------------------
+29.  apps/demo-api/staging.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-api-staging
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: overlays/staging
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+----------------------------------------------
+30.  apps/frontend/staging.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: frontend-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: overlays/staging
+    helm:
+      valueFiles:
+        - values/frontend-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+
+----------------------------------------------
+31.  apps/frontend/prod.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: frontend-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: overlays/prod
+    helm:
+      valueFiles:
+        - values/frontend-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+
+----------------------------------------------
+32.  apps/frontend/dev.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: frontend-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: overlays/dev
+    helm:
+      valueFiles:
+        - values/frontend-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+
+----------------------------------------------
+33.  apps/app-of-apps.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-of-apps
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/girmaat/k8s-gitops-progressive-deployment-stack.git
+    targetRevision: HEAD
+    path: apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+
+----------------------------------------------
+34.  rollout-strategies/demo-api-rollout.yaml
+----------------------------------------------
+
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: demo-api
+spec:
+  replicas: 3
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: demo-api
+  template:
+    metadata:
+      labels:
+        app: demo-api
+    spec:
+      containers:
+        - name: demo-api
+          image: ghcr.io/org/demo-api:{{ .Values.image.tag }}
+          ports:
+            - containerPort: 8080
+  strategy:
+    canary:
+      maxUnavailable: 1
+      maxSurge: 1
+      steps:
+        - setWeight: 10
+        - pause: { duration: 30s }
+        - setWeight: 50
+        - pause: { duration: 60s }
+        - setWeight: 100
+
+
+----------------------------------------------
+35.  policies/restrict-latest-image.yaml
+----------------------------------------------
+
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRepos
+metadata:
+  name: block-latest-tag
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+  parameters:
+    repos:
+      - "ghcr.io/girmaat/"  # optional
+  validation:
+    message: "Use of 'image: latest' is not allowed. Please pin to a version tag."
+  matchConditions:
+    - key: "image"
+      operator: NotEquals
+      values: ["latest"]
+
+
+----------------------------------------------
+36.  policies/templates/k8snoimagelatest-template.yaml
+----------------------------------------------
+
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8snoimagelatest
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sNoImageLatest
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8snoimagelatest
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          endswith(container.image, ":latest")
+          msg := sprintf("Image tag 'latest' is not allowed: %v", [container.image])
+        }
+
+
+----------------------------------------------
+37.  policies/templates/k8srequireteamlabel-template.yaml
+----------------------------------------------
+
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequireteamlabel
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequireTeamLabel
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequireteamlabel
+
+        violation[{"msg": msg}] {
+          not input.review.object.metadata.labels["team"]
+          msg := "🚫 Missing required label: 'team'"
+        }
+
+
+----------------------------------------------
+38.  policies/constraints/deny-latest-tag.yaml
+----------------------------------------------
+
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sNoImageLatest
+metadata:
+  name: deny-latest-tag
+spec:
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+
+
+----------------------------------------------
+39.  policies/constraints/require-team-label.yaml
+----------------------------------------------
+
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequireTeamLabel
+metadata:
+  name: enforce-team-label
+spec:
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet", "DaemonSet"]
+
+
+----------------------------------------------
+40.  policies/restrict-team-label.yaml
+----------------------------------------------
+
+# Policy: Require 'team' label on all workloads
+# Description: Enforces every Deployment, StatefulSet, and DaemonSet to have a `metadata.labels.team` defined.
+# Applies To: apps/Deployment, apps/StatefulSet, apps/DaemonSet
+# Enforced By: Gatekeeper ConstraintTemplate + Constraint
+# Purpose: Ensures workload ownership for billing, support, and GitOps routing.
+
+
+----------------------------------------------
+41.  policies/README.md
+----------------------------------------------
+
+# Gatekeeper Policies
+
+OPA/Gatekeeper ConstraintTemplates and Constraints for cluster policy enforcement.
+
+---
+
+## Table of Contents
+- [Block Image Tags](#block-image-tags)
+- [Require Team Label](#require-team-label)
+- [Structure](#structure)
+
+---
+
+## Block Image Tags
+
+- Blocks deployments using `image:latest`.
+
+## Require Team Label
+
+- Ensures all workloads have a `team` label to indicate ownership.
+
+##Structure
+
+- `templates/`: Gatekeeper Rego logic (ConstraintTemplates)
+- `constraints/`: Constraints applying policies to resources
+
+
+----------------------------------------------
+42.  argo-config/argocd-project.yaml
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+43.  argo-config/image-updater.yaml
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+44.  manifests/ingress-controller.yaml
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+45.  scripts/verify-drift.sh
+----------------------------------------------
+
+#!/bin/bash
+
+# -----------------------------------------------------------------------------
+# GitOps Drift Detection Script for ArgoCD
+# -----------------------------------------------------------------------------
+# - Compares Git state vs live cluster for each ArgoCD-managed app
+# - Outputs structured logs
+# - Detects drift without making changes
+# - Optional: --refresh to sync ArgoCD's cache before checking
+# -----------------------------------------------------------------------------
+
+set -euo pipefail
+
+APP_PREFIX="demo-api"                    # Filter by app prefix (your Helm chart/app name)
+ENVIRONMENTS=("dev" "staging" "prod")   # Environments to check
+LOGFILE="./scripts/drift-report.log"    # Log output file
+REFRESH="false"                         # Refresh ArgoCD app cache
+
+# Handle optional --refresh flag
+if [[ "${1:-}" == "--refresh" ]]; then
+  REFRESH="true"
+fi
+
+# Start log entry
+echo "" >> "$LOGFILE"
+echo "Drift check run at $(date)" >> "$LOGFILE"
+echo "------------------------------------------" >> "$LOGFILE"
+
+DRIFT_FOUND=0
+
+for ENV in "${ENVIRONMENTS[@]}"; do
+  APP_NAME="${APP_PREFIX}-${ENV}"
+
+  echo "Checking app: $APP_NAME"
+  echo "Checking app: $APP_NAME" >> "$LOGFILE"
+
+  if [[ "$REFRESH" == "true" ]]; then
+    echo "Refreshing app state from cluster..."
+    argocd app refresh "$APP_NAME" --hard >> "$LOGFILE" 2>&1
+  fi
+
+  echo "Running ArgoCD diff..."
+  if ! argocd app diff "$APP_NAME" >> "$LOGFILE" 2>&1; then
+    echo "Drift detected in [$APP_NAME]"
+    echo "Drift detected in [$APP_NAME]" >> "$LOGFILE"
+    DRIFT_FOUND=1
+  else
+    echo "No drift detected in [$APP_NAME]"
+    echo "No drift detected in [$APP_NAME]" >> "$LOGFILE"
+  fi
+
+  echo "" >> "$LOGFILE"
+done
+
+echo "Drift check complete."
+
+if [[ "$DRIFT_FOUND" -eq 1 ]]; then
+  echo "ALERT: Drift detected in one or more applications!"
+  echo "See $LOGFILE for full diff logs"
+else
+  echo "All applications match Git (no drift)"
+fi
+
+
+----------------------------------------------
+46.  scripts/global/fix-aws-time-skew.sh
+----------------------------------------------
+
+#!/bin/bash
+set -euo pipefail
+
+BLUE='\033[1;34m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${BLUE}Restarting chronyd...${NC}"
+sudo systemctl restart chronyd
+
+echo -e "${BLUE}Forcing immediate time sync with 'chronyc makestep'...${NC}"
+sudo chronyc makestep
+
+echo -e "${BLUE}Checking new system time drift...${NC}"
+chronyc tracking
+
+echo -e "${BLUE}Verifying AWS credentials (sts get-caller-identity)...${NC}"
+if aws sts get-caller-identity > /dev/null 2>&1; then
+  echo -e "${GREEN}[✔] AWS credentials are now valid. Time is synced.${NC}"
+else
+  echo -e "${RED}[✘] AWS authentication still failing. Check your credentials or session.${NC}"
+  exit 1
+fi
+
+----------------------------------------------
+47.  scripts/lint-values.sh
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+48.  scripts/audit-gitops.sh
+----------------------------------------------
+
+#!/bin/bash
+set -euo pipefail
+
+LOGFILE="./scripts/audit-gitops-report.log"
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"  # set externally
+DRIFT_FOUND=0
+VIOLATIONS_FOUND=0
+
+echo "Starting GitOps Audit at $(date)"
+echo "=====================================" | tee "$LOGFILE"
+
+# -------------------------------
+# 1. Run ArgoCD Drift Check
+# -------------------------------
+echo "Checking ArgoCD app drift..." | tee -a "$LOGFILE"
+./scripts/verify-drift.sh --refresh >> "$LOGFILE"
+
+if grep -q "Drift detected" "$LOGFILE"; then
+  DRIFT_FOUND=1
+fi
+
+# -------------------------------
+# 2. Gatekeeper Violations
+# -------------------------------
+echo "Checking Gatekeeper policy violations..." | tee -a "$LOGFILE"
+kubectl get constrainttemplates --no-headers -o custom-columns=":metadata.name" | while read -r tmpl; do
+  echo "Violations for policy: $tmpl" | tee -a "$LOGFILE"
+  VIOLATIONS=$(kubectl get constraint --all-namespaces --selector="constrainttemplate=${tmpl}" -o yaml |
+    yq '.items[] | select(.status.violations) | {name: .metadata.name, violations: .status.violations}' 2>/dev/null)
+
+  if [[ -n "$VIOLATIONS" ]]; then
+    VIOLATIONS_FOUND=1
+    echo "$VIOLATIONS" | tee -a "$LOGFILE"
+  fi
+done
+
+# -------------------------------
+# 3. Send Slack Notification if Issues Found
+# -------------------------------
+if [[ "$DRIFT_FOUND" -eq 1 || "$VIOLATIONS_FOUND" -eq 1 ]]; then
+  if [[ -n "$SLACK_WEBHOOK_URL" ]]; then
+    echo "Alert: GitOps issues found, sending Slack notification."
+
+    SNIPPET=$(tail -n 25 "$LOGFILE" | sed 's/"/\\"/g')
+    curl -X POST -H 'Content-type: application/json' \
+      --data @- "$SLACK_WEBHOOK_URL" <<EOF
+{
+  "attachments": [
+    {
+      "color": "#FF0000",
+      "title": "GitOps Drift or Policy Violation Detected",
+      "text": "The latest GitOps audit has detected one or more issues.",
+      "fields": [
+        {
+          "title": "Drift",
+          "value": "${DRIFT_FOUND}"
+        },
+        {
+          "title": "Policy Violations",
+          "value": "${VIOLATIONS_FOUND}"
+        }
+      ],
+      "footer": "GitOps Audit Job",
+      "ts": $(date +%s)
+    },
+    {
+      "color": "#FFA500",
+      "title": "Log Excerpt",
+      "text": "```$SNIPPET```"
+    }
+  ]
+}
+EOF
+  else
+    echo "SLACK_WEBHOOK_URL not set. Skipping Slack alert."
+  fi
+else
+  echo "No drift or violations detected. No alert sent."
+fi
+
+echo "GitOps audit complete."
+
+
+----------------------------------------------
+49.  scripts/README.md
+----------------------------------------------
+
+# Automation Scripts
+
+Scripts for GitOps workflows and cluster auditing.
+
+---
+
+## Table of Contents
+- [Promotion](#promotion)
+- [Drift Detection](#drift-detection)
+- [Audit & Policy Scan](#audit--policy-scan)
+
+---
+
+### Promote a Service
+
+```bash
+# Promote demo-api from staging → prod
+./scripts/promote.sh demo-api
+
+# Promote frontend from dev → staging
+./scripts/promote.sh frontend dev staging
+
+##  Drift Detection
+
+- `verify-drift.sh`: Runs `argocd app diff` for drift reporting
+
+## Audit & Policy Scan
+
+- `audit-gitops.sh`: Combines drift check and Gatekeeper scan, sends Slack alert
+
+# scripts/
+
+Automation scripts to support GitOps workflows.
+
+- `promote-image-to-prod.sh` — safely promotes staging → prod
+- `verify-drift.sh` — drift detection against ArgoCD
+- `audit-gitops.sh` — full audit with Slack alert
+
+----------------------------------------------
+50.  scripts/rollback-prod.sh
+----------------------------------------------
+
+#!/bin/bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Script: rollback-prod.sh
+# Purpose: Revert the last promotion to production by reverting the Git commit
+# Usage: ./rollback-prod.sh
+# -----------------------------------------------------------------------------
+
+# Confirm before proceeding
+read -p "Are you sure you want to revert the last production promotion? [y/N] " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+  echo "Cancelled."
+  exit 0
+fi
+
+# Identify the last commit that modified the prod values file
+PROD_FILE="overlays/prod/values/demo-api-values.yaml"
+LAST_COMMIT=$(git log -n 1 --pretty=format:%H -- "$PROD_FILE")
+
+echo "Reverting commit: $LAST_COMMIT"
+git revert "$LAST_COMMIT" --no-edit
+
+echo "Commit reverted. Now pushing to main..."
+git push origin main
+
+echo "Rollback triggered. ArgoCD will sync the reverted version automatically."
+
+
+----------------------------------------------
+51.  scripts/rollback-staging.sh
+----------------------------------------------
+
+#!/bin/bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Script: rollback-staging.sh
+# Purpose: Revert the last promotion to staging by reverting the Git commit
+# Usage: ./rollback-staging.sh
+# -----------------------------------------------------------------------------
+
+# Confirm before proceeding
+read -p "Are you sure you want to revert the last staging promotion? [y/N] " confirm
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+  echo "Cancelled."
+  exit 0
+fi
+
+# Identify the last commit that modified the staging values file
+STAGING_FILE="overlays/staging/values/demo-api-values.yaml"
+LAST_COMMIT=$(git log -n 1 --pretty=format:%H -- "$STAGING_FILE")
+
+echo "Reverting commit: $LAST_COMMIT"
+git revert "$LAST_COMMIT" --no-edit
+
+echo "Commit reverted. Now pushing to main..."
+git push origin main
+
+echo "Rollback triggered. ArgoCD will sync the reverted version to staging automatically."
+
+
+----------------------------------------------
+52.  scripts/promote.sh
+----------------------------------------------
+
+#!/bin/bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Script: promote.sh
+# Purpose: Promote image tag from one environment to another for a given service
+# Usage:
+#   ./promote.sh demo-api staging prod
+#   ./promote.sh demo-api              # defaults to staging -> prod
+# -----------------------------------------------------------------------------
+
+SERVICE="${1:-}"
+FROM_ENV="${2:-staging}"
+TO_ENV="${3:-prod}"
+
+if [[ -z "$SERVICE" ]]; then
+  echo "Error: Service name is required."
+  echo "Usage: ./promote.sh <service-name> [from-env] [to-env]"
+  exit 1
+fi
+
+FROM_FILE="overlays/${FROM_ENV}/values/${SERVICE}-values.yaml"
+TO_FILE="overlays/${TO_ENV}/values/${SERVICE}-values.yaml"
+
+if [[ ! -f "$FROM_FILE" || ! -f "$TO_FILE" ]]; then
+  echo "Error: values.yaml not found for service '$SERVICE' in one of the environments."
+  echo "FROM: $FROM_FILE"
+  echo "TO:   $TO_FILE"
+  exit 1
+fi
+
+# Extract image tag from source environment
+TAG=$(yq '.image.tag' "$FROM_FILE")
+echo "Promoting service: $SERVICE"
+echo "From environment: $FROM_ENV"
+echo "To environment:   $TO_ENV"
+echo "Tag to promote:   $TAG"
+
+# Patch target environment
+yq e ".image.tag = \"$TAG\"" -i "$TO_FILE"
+
+# Commit the promotion
+git add "$TO_FILE"
+git commit -m "promote: ${SERVICE} ${FROM_ENV} → ${TO_ENV}: $TAG"
+
+echo "Promotion committed. Push to trigger ArgoCD sync."
+
+
+----------------------------------------------
+53.  scripts/promote-all.sh
+----------------------------------------------
+
+#!/bin/bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Script: promote-all.sh
+# Purpose: Promote image tags from one environment to another for all services
+# Usage:
+#   ./promote-all.sh staging prod
+# -----------------------------------------------------------------------------
+
+FROM_ENV="${1:-staging}"
+TO_ENV="${2:-prod}"
+
+if [[ -z "$FROM_ENV" || -z "$TO_ENV" ]]; then
+  echo "Usage: ./promote-all.sh <from-env> <to-env>"
+  exit 1
+fi
+
+VALUES_DIR="overlays/${FROM_ENV}/values"
+if [[ ! -d "$VALUES_DIR" ]]; then
+  echo "❌ Error: Source environment values directory does not exist: $VALUES_DIR"
+  exit 1
+fi
+
+echo "📦 Bulk promoting all services from $FROM_ENV → $TO_ENV..."
+
+for FILE in "$VALUES_DIR"/*-values.yaml; do
+  SERVICE=$(basename "$FILE" | sed 's/-values.yaml//')
+
+  FROM_FILE="overlays/${FROM_ENV}/values/${SERVICE}-values.yaml"
+  TO_FILE="overlays/${TO_ENV}/values/${SERVICE}-values.yaml"
+
+  if [[ ! -f "$TO_FILE" ]]; then
+    echo "⚠️  Skipping $SERVICE — no target values file found in $TO_ENV"
+    continue
+  fi
+
+  TAG=$(yq '.image.tag' "$FROM_FILE")
+  echo "🔄 Promoting $SERVICE: $TAG"
+
+  yq e ".image.tag = \"$TAG\"" -i "$TO_FILE"
+  git add "$TO_FILE"
+  git commit -m "promote: ${SERVICE} ${FROM_ENV} → ${TO_ENV}: $TAG"
+done
+
+echo "✅ Bulk promotion complete. Push the changes to trigger ArgoCD sync."
+
+
+----------------------------------------------
+54.  scripts/render-all-services.sh
+----------------------------------------------
+
+#!/bin/bash
+
+# This script renders Helm manifests for all services in all environments.
+# It reads every *-values.yaml file under overlays/<env>/values/
+# and appends their rendered output to overlays/<env>/rendered.yaml
+
+CHART_PATH="charts/base-chart"
+ENVIRONMENTS=(dev staging prod)
+
+echo "🔁 Rendering Rollout manifests for all services..."
+
+for env in "${ENVIRONMENTS[@]}"; do
+  echo "📁 Environment: $env"
+  
+  OUTPUT_FILE="overlays/${env}/rendered.yaml"
+  echo "# Generated rollout manifests for ${env}" > "$OUTPUT_FILE"
+
+  for values_file in overlays/${env}/values/*-values.yaml; do
+    service_name=$(basename "$values_file" | cut -d'-' -f1)
+    
+    echo "  🔹 Rendering $service_name..."
+
+    helm template "$service_name" "$CHART_PATH" \
+      -f "$values_file" >> "$OUTPUT_FILE"
+
+    echo "---" >> "$OUTPUT_FILE"
+  done
+
+  echo "✅ Rendered: $OUTPUT_FILE"
+done
+
+
+----------------------------------------------
+55.  monitoring/dashboards/argo-rollout-status.json
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+56.  monitoring/dashboards/demo-api-rollout.json
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+57.  monitoring/dashboards/namespace-rollout-resource-usage.json
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+58.  monitoring/dashboards/hpa-rollout-dashboard.json
+----------------------------------------------
+
+{
+  "id": null,
+  "title": "HPA Behavior & Rollout Progression",
+  "timezone": "browser",
+  "schemaVersion": 26,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "HPA Replica Count Over Time",
+      "targets": [
+        {
+          "expr": "kube_horizontalpodautoscaler_status_current_replicas{hpa=\"demo-api\"}",
+          "legendFormat": "Current Replicas",
+          "refId": "A"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_spec_max_replicas{hpa=\"demo-api\"}",
+          "legendFormat": "Max Replicas",
+          "refId": "B"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Replicas",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "CPU Utilization Target vs Actual (HPA Source)",
+      "targets": [
+        {
+          "expr": "avg(container_cpu_usage_seconds_total{container=\"demo-api\"}) by (pod)",
+          "legendFormat": "Actual Usage",
+          "refId": "C"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_spec_target_cpu_utilization_percentage{hpa=\"demo-api\"}",
+          "legendFormat": "Target Utilization",
+          "refId": "D"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "percent",
+          "label": "CPU Usage",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "Rollout Step Progression",
+      "targets": [
+        {
+          "expr": "rollout_info{rollout=\"demo-api\"}",
+          "legendFormat": "Step Index",
+          "refId": "E"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Step",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    }
+  ]
+}
+
+----------------------------------------------
+59.  monitoring/alerts/drift-detection.yaml
+----------------------------------------------
+
+{
+  "id": null,
+  "title": "Demo API Rollout Monitoring",
+  "timezone": "browser",
+  "schemaVersion": 26,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "HTTP Success Rate (2xx/4xx)",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"demo-api\",status!~\"5..\"}[1m])) / sum(rate(http_requests_total{job=\"demo-api\"}[1m]))",
+          "legendFormat": "success-rate",
+          "refId": "A"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "percent",
+          "label": "Success Rate",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "HTTP 5xx Error Rate",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total{job=\"demo-api\",status=~\"5..\"}[1m])",
+          "legendFormat": "5xx Errors",
+          "refId": "B"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Errors/sec",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "CPU Usage (Cores)",
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{container=\"demo-api\"}[1m])",
+          "legendFormat": "CPU Usage",
+          "refId": "C"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "short",
+          "label": "Cores",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    },
+    {
+      "type": "graph",
+      "title": "Memory Usage (Bytes)",
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{container=\"demo-api\"}",
+          "legendFormat": "Memory Usage",
+          "refId": "D"
+        }
+      ],
+      "datasource": "Prometheus",
+      "yaxes": [
+        {
+          "format": "bytes",
+          "label": "Memory",
+          "logBase": 1
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "lines": true,
+      "linewidth": 2,
+      "fill": 1
+    }
+  ]
+}
+
+----------------------------------------------
+60.  monitoring/logging/cloudtrail-ingestor.yaml
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+61.  monitoring/demo-api-dashboard-configmap.yaml
+----------------------------------------------
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-api-rollout-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  demo-api-rollout.json: |
+    {
+      "id": null,
+      "title": "Demo API Rollout Monitoring",
+      "timezone": "browser",
+      "schemaVersion": 26,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "graph",
+          "title": "HTTP Success Rate (2xx/4xx)",
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{job=\"demo-api\",status!~\"5..\"}[1m])) / sum(rate(http_requests_total{job=\"demo-api\"}[1m]))",
+              "legendFormat": "success-rate",
+              "refId": "A"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "percent",
+              "label": "Success Rate",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "HTTP 5xx Error Rate",
+          "targets": [
+            {
+              "expr": "rate(http_requests_total{job=\"demo-api\",status=~\"5..\"}[1m])",
+              "legendFormat": "5xx Errors",
+              "refId": "B"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "label": "Errors/sec",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "CPU Usage (Cores)",
+          "targets": [
+            {
+              "expr": "rate(container_cpu_usage_seconds_total{container=\"demo-api\"}[1m])",
+              "legendFormat": "CPU Usage",
+              "refId": "C"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "label": "Cores",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "Memory Usage (Bytes)",
+          "targets": [
+            {
+              "expr": "container_memory_usage_bytes{container=\"demo-api\"}",
+              "legendFormat": "Memory Usage",
+              "refId": "D"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "bytes",
+              "label": "Memory",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        }
+      ]
+    }
+
+
+----------------------------------------------
+62.  monitoring/namespace-rollout-dashboard-configmap.yaml
+----------------------------------------------
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: namespace-rollout-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  namespace-rollout-resource-usage.json: |
+    {
+      "id": null,
+      "title": "Namespace & Rollout Strategy Resource Usage",
+      "timezone": "browser",
+      "schemaVersion": 26,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "graph",
+          "title": "CPU Usage by Namespace",
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total[1m])) by (namespace)",
+              "legendFormat": "{{namespace}}",
+              "refId": "A"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "label": "CPU Cores",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "Memory Usage by Namespace",
+          "targets": [
+            {
+              "expr": "sum(container_memory_usage_bytes) by (namespace)",
+              "legendFormat": "{{namespace}}",
+              "refId": "B"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "bytes",
+              "label": "Memory",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "Rollout Replicas by Strategy",
+          "targets": [
+            {
+              "expr": "sum(kube_replica_set_status_ready_replicas) by (namespace, rollout_strategy)",
+              "legendFormat": "{{namespace}} / {{rollout_strategy}}",
+              "refId": "C"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "label": "Replicas",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        }
+      ]
+    }
+
+
+----------------------------------------------
+63.  monitoring/hpa-rollout-dashboard-configmap.yaml
+----------------------------------------------
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hpa-rollout-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  hpa-rollout-dashboard.json: |
+    {
+      "id": null,
+      "title": "HPA Behavior & Rollout Progression",
+      "timezone": "browser",
+      "schemaVersion": 26,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "graph",
+          "title": "HPA Replica Count Over Time",
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{hpa=\"demo-api\"}",
+              "legendFormat": "Current Replicas",
+              "refId": "A"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{hpa=\"demo-api\"}",
+              "legendFormat": "Max Replicas",
+              "refId": "B"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "label": "Replicas",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "CPU Utilization Target vs Actual (HPA Source)",
+          "targets": [
+            {
+              "expr": "avg(container_cpu_usage_seconds_total{container=\"demo-api\"}) by (pod)",
+              "legendFormat": "Actual Usage",
+              "refId": "C"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_target_cpu_utilization_percentage{hpa=\"demo-api\"}",
+              "legendFormat": "Target Utilization",
+              "refId": "D"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "percent",
+              "label": "CPU Usage",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        },
+        {
+          "type": "graph",
+          "title": "Rollout Step Progression",
+          "targets": [
+            {
+              "expr": "rollout_info{rollout=\"demo-api\"}",
+              "legendFormat": "Step Index",
+              "refId": "E"
+            }
+          ],
+          "datasource": "Prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "label": "Step",
+              "logBase": 1
+            },
+            {
+              "format": "short"
+            }
+          ],
+          "lines": true,
+          "linewidth": 2,
+          "fill": 1
+        }
+      ]
+    }
+
+
+----------------------------------------------
+64.  monitoring/gitops-audit-cronjob.yaml
+----------------------------------------------
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gitops-audit
+  namespace: monitoring
+  labels:
+    app: gitops-audit
+spec:
+  schedule: "0 * * * *"  #  Every hour
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: audit
+              image: ghcr.io/girmaat/gitops-audit:latest  #  Replace if needed
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: slack-webhook-secret
+                      key: url
+              resources:
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+
+
+----------------------------------------------
+65.  monitoring/README.md
+----------------------------------------------
+
+# Monitoring
+
+Dashboards, alerts, and observability configs for Argo Rollouts, HPA, and drift detection.
+
+---
+
+## Table of Contents
+- [Grafana Dashboards](#grafana-dashboards)
+- [Alerting](#alerting)
+- [CronJobs](#cronjobs)
+
+---
+
+## Grafana Dashboards
+
+- `demo-api-rollout.json`: Canary rollout visualization
+- `namespace-rollout-resource-usage.json`: Rollout-specific resource usage
+
+## Alerting
+
+- Slack alerts for drift and policy violations are integrated with `audit-gitops.sh`.
+
+## CronJobs
+
+- `gitops-audit-cronjob.yaml`: Triggers `audit-gitops.sh` container to scan hourly.
+
+
+----------------------------------------------
+66.  .gitignore
+----------------------------------------------
+
+# OS/system files
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
+
+# Logs & temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+
+# Helm
+charts/**/charts/
+charts/**/tmpcharts/
+charts/**/values.yaml~
+charts/**/Chart.lock
+
+# Kubernetes
+*.out
+*.orig
+*.rej
+
+# Kustomize build output
+overlays/**/build/
+overlays/**/kustomization.yaml.backup
+
+# Terraform (optional if using)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Python (if scripting in CI)
+__pycache__/
+*.py[cod]
+
+# Secrets (precaution)
+secrets/**/*.yaml
+!secrets/**/README.md   # allow README stubs
+
+.git*
+
+audit-runner/*.log
+audit-runner/*.tmp
+
+
+----------------------------------------------
+67.  README.md
+----------------------------------------------
+
+# k8s-gitops-progressive-deployment-stack
+
+> A full-stack GitOps delivery pipeline with Helm, Kustomize, ArgoCD, Argo Rollouts, Gatekeeper, and Slack-integrated audit workflows.
+
+---
+
+## Table of Contents
+- [Project Structure](#-project-structure)
+- [Environments](#-environments)
+- [Getting Started](#️-getting-started)
+- [Drift Detection & Auditing](#-drift-detection--auditing)
+- [Policies Enforced (Gatekeeper)](#-policies-enforced-gatekeeper)
+- [Ownership](#-ownership)
+
+---
+
+## Project Structure
+
+```plaintext
+.
+├── apps/                      # ArgoCD app manifests
+├── charts/                   # Helm base charts
+├── overlays/                 # Env-specific Kustomize overlays
+├── argo-config/              # ArgoCD project/image updater config
+├── rollout-strategies/      # Canary rollout definitions
+├── policies/                # Gatekeeper templates + constraints
+├── monitoring/              # Grafana dashboards, alerts
+├── scripts/                 # Promotion, audit, drift detection
+├── audit-runner/            # Dockerized CronJob image
+└── project-metadata.yaml    # Metadata and ownership
+```
+
+## Environments
+
+| Env      | Namespace | ArgoCD Sync | Rollout Strategy        |
+|----------|-----------|-------------|--------------------------|
+| dev      | `dev`     | Auto      | Basic canary             |
+| staging  | `staging` | Auto      | Canary with metrics      |
+| prod     | `prod`    | Auto      | Canary + analysis + pause|
+
+## Getting Started
+
+```bash
+# Deploy dev app via ArgoCD
+kubectl apply -f apps/dev-demo-api.yaml
+
+# Render Helm with dev values
+helm template charts/services/demo-api -f overlays/dev/values/demo-api-values.yaml
+```
+
+## Drift Detection & Auditing
+
+- `scripts/verify-drift.sh`: Detects ArgoCD drift
+- `scripts/audit-gitops.sh`: Runs drift + Gatekeeper checks + Slack alert
+- `audit-runner/`: Docker container & CronJob for automation
+
+## Policies Enforced (Gatekeeper)
+
+- Block `image: latest`
+- Require `team` label
+- Extendable with new rules
+
+## Ownership
+
+Defined in `project-metadata.yaml`.
+
+## Promotion Workflow
+
+1. CI pushes a new image tag
+2. Tag is committed to `overlays/staging/values.yaml`
+3. Run `scripts/promote-image-to-prod.sh` to promote
+4. ArgoCD detects Git change and syncs to cluster
+
+----------------------------------------------
+68.  project-metadata.yaml
+----------------------------------------------
+
+services:
+  demo-api:
+    description: REST API microservice for demonstrating progressive delivery using Helm + Kustomize + GitOps
+    owner: dev1
+    team: platform
+    email: demo-api-team@example.com  # Replace with actual team contact
+    environments:
+      - dev
+      - staging
+      - prod
+    argoAppNames:
+      dev: demo-api-dev
+      staging: demo-api-staging
+      prod: demo-api-prod
+    chart: charts/services/demo-api
+    overlayPaths:
+      dev: overlays/dev
+      staging: overlays/staging
+      prod: overlays/prod
+    rollout: true
+    hpa:
+      dev: disabled
+      staging: enabled
+      prod: enabled
+    probes: parameterized
+    promotionScript: scripts/promote-image-to-prod.sh
+    monitoringDashboards:
+      - monitoring/demo-api-dashboard-configmap.yaml
+      - monitoring/hpa-rollout-dashboard-configmap.yaml
+    policyConstraints:
+      - deny-latest-tag
+      - enforce-team-label
+
+
+----------------------------------------------
+69.  tests/helm/demo-api-test.yaml
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+70.  tests/kustomize/dev-overlay-check.sh
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+71.  tests/secrets/validate-esosync.sh
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+72.  audit-runner/Dockerfile
+----------------------------------------------
+
+FROM alpine:3.19
+
+# Install packages
+RUN apk add --no-cache bash curl git \
+  && apk add --no-cache --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community yq
+
+# Install kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+  && chmod +x kubectl && mv kubectl /usr/local/bin/
+
+# Install ArgoCD CLI
+RUN curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 \
+  && chmod +x /usr/local/bin/argocd
+
+# Add script and supporting files
+WORKDIR /app
+COPY scripts/audit-gitops.sh .
+COPY scripts/verify-drift.sh .
+COPY scripts/drift-report.log .
+
+ENTRYPOINT ["bash", "/app/audit-gitops.sh"]
+
+
+----------------------------------------------
+73.  audit-runner/scripts/audit-gitops.sh
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+74.  audit-runner/scripts/verify-drift.sh
+----------------------------------------------
+
+[EMPTY FILE]
+
+
+----------------------------------------------
+75.  audit-runner/README.md
+----------------------------------------------
+
+# 🕵️ GitOps Audit Runner
+
+Containerized runner for GitOps auditing used in a CronJob.
+
+---
+
+## Table of Contents
+- [What's Included](#whats-included)
+- [Dockerfile](#dockerfile)
+- [Usage](#usage)
+
+---
+
+## What's Included
+
+- `audit-gitops.sh`, `verify-drift.sh`
+- Dockerfile with bash, argocd CLI, kubectl, yq, curl
+
+## Dockerfile
+
+Alpine-based image that runs audit on entrypoint.  
+Used by `monitoring/gitops-audit-cronjob.yaml`.
+
+## Usage
+
+```bash
+docker build -t ghcr.io/org/gitops-audit:latest .
+```
+
+
+----------------------------------------------
+76.  .pre-commit-config.yaml
+----------------------------------------------
+
+
+repos:
+  - repo: https://github.com/pre-commit/mirrors-yamllint
+    rev: v1.32.0
+    hooks:
+      - id: yamllint
+
+  - repo: https://github.com/instrumenta/kubeval
+    rev: v0.16.1
+    hooks:
+      - id: kubeval
+        args: ["--strict"]
+
+  - repo: local
+    hooks:
+      - id: helm-lint
+        name: Helm Lint
+        entry: bash -c 'helm lint charts/services/*'
+        language: system
+        files: ^charts/
+
+      - id: kustomize-build
+        name: Kustomize Build (overlays/)
+        entry: bash -c 'kustomize build overlays/dev && kustomize build overlays/staging && kustomize build overlays/prod'
+        language: system
+        files: ^overlays/
+
+
+----------------------------------------------
+77.  docs/onboarding-new-service.md
+----------------------------------------------
+
+# 🛠️ Onboarding a New Service into the GitOps Repository
+
+This guide helps new teams safely add their service to the GitOps deployment repo using shared Helm charts, overlays, and ArgoCD apps.
+
+---
+
+## Pre-requisites
+
+- You have access to this Git repo
+- Your service has a Docker image published (e.g., to GitHub Container Registry or ECR)
+- You understand Git PR workflows
+
+---
+
+## Onboarding Steps
+
+### 1. Reuse the Shared Helm Chart
+
+If your service uses common patterns (probes, HPA, Rollouts), reuse:
+```
+charts/services/demo-api/
+```
+
+If needed, copy and rename it:
+```
+charts/services/<your-service>/
+```
+
+---
+
+### 2. Create Values Files Per Environment
+
+Add these files:
+```
+overlays/dev/values/<service>-values.yaml
+overlays/staging/values/<service>-values.yaml
+overlays/prod/values/<service>-values.yaml
+```
+
+Customize:
+- `image.repository` and `tag`
+- `resources`, `probes`, `strategy`, `hpa`
+
+---
+
+### 3. Render Helm Templates and Set Up Kustomize
+
+Generate rendered output:
+```bash
+helm template charts/services/demo-api -f overlays/dev/values/<service>-values.yaml > overlays/dev/rendered.yaml
+```
+
+Then update or create:
+```
+overlays/dev/kustomization.yaml
+```
+
+---
+
+### 4. Create ArgoCD App Files
+
+Add ArgoCD Application CRs in:
+```
+apps/<service>/dev.yaml
+apps/<service>/staging.yaml
+apps/<service>/prod.yaml
+```
+
+Make sure `path` matches the overlay (e.g., `overlays/dev`)  
+Use `helm.valueFiles: values/<service>-values.yaml`
+
+---
+
+### 5. Test It
+
+- Helm test:
+  ```bash
+  helm lint charts/services/<service>
+  ```
+- Kustomize test:
+  ```bash
+  kustomize build overlays/dev
+  ```
+
+---
+
+### 6. Use Promotion Scripts
+
+Promote after staging is verified:
+```bash
+./scripts/promote.sh <service> staging prod
+```
+
+Bulk promotion:
+```bash
+./scripts/promote-all.sh staging prod
+```
+
+---
+
+### 7. Rollback If Needed
+
+```bash
+./scripts/rollback-prod.sh
+```
+
+This reverts the last Git commit that changed the prod image tag.
+
+---
+
+### 8. Add Metadata and Review Routing
+
+- Update `project-metadata.yaml`:
+  ```yaml
+  <service-name>:
+    owner: dev1
+    environments: [dev, staging, prod]
+  ```
+
+- Update `CODEOWNERS`:
+  ```
+  overlays/prod/values/<service>-values.yaml @devopsadmin
+  charts/services/<service>/* @<developer>
+  ```
+
+---
+
+## Tips
+
+- Keep image tags unique and never use `latest` in prod.
+- Always open a PR — never push directly to `main`.
+- Validate your overlay before merging.
+
+

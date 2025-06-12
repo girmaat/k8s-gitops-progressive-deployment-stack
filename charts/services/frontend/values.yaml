@@ -1,0 +1,23 @@
+# Sample values for frontend
+# These are not used in production — real values live in overlays/<env>/values/frontend-values.yaml
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/example/frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+
+strategy:
+  type: blueGreen
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
